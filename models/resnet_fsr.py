@@ -159,7 +159,7 @@ class ResNet(nn.Module):
         rec_out = self.aux(torch.nn.AdaptiveAvgPool2d(1)(rec_feat).reshape(rec_feat.shape[0], -1))
         rec_outputs.append(rec_out)
 
-        out = r_feat + rec_feat
+        out = r_feat
 
         out = nn.AdaptiveAvgPool2d(1)(out)
         out = out.view(out.size(0), -1)
