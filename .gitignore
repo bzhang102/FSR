@@ -1,0 +1,7 @@
+**/__pycache__/**
+**/data/**
+**/nonFSR_weights/**
+**/FSR_weights/**
+FSR_weights/cifar10/resnet18/cifar10_resnet18.pth
+nonFSR_weights/cifar10/resnet18/cifar10_resnet18.pth
+**/myenv/**
