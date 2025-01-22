@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 
+from models.resnet_nofsr import ResNet18_NoFSR
 from models.resnet_fsr import ResNet18_FSR
 from models.vgg_fsr import vgg16_FSR
 from models.wideresnet34_fsr import WideResNet34_FSR
@@ -91,6 +92,7 @@ elif args.dataset == 'svhn':
 
 models = {
     'resnet18': ResNet18_FSR(tau=args.tau, num_classes=num_classes, image_size=image_size),
+    'resnet18_nofsr': ResNet18_NoFSR(num_classes=num_classes, image_size=image_size),
     'vgg16': vgg16_FSR(tau=args.tau, num_classes=num_classes, image_size=image_size),
     'wideresnet34': WideResNet34_FSR(tau=args.tau, num_classes=num_classes, image_size=image_size),
 }
