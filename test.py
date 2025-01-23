@@ -40,6 +40,10 @@ if args.model == 'resnet18':
     from models.resnet_fsr import ResNet18_FSR
     net = ResNet18_FSR
 
+elif args.model == 'resnet18_nofsr':
+    from models.resnet_nofsr import ResNet18_NoFSR
+    net = ResNet18_NoFSR
+
 elif args.model == 'vgg16':
     from models.vgg_fsr import vgg16_FSR
     net = vgg16_FSR
@@ -104,15 +108,16 @@ class CW_loss(nn.Module):
         target_var = Variable(target_onehot, requires_grad=False)
         real = (target_var * output).sum(1)
         other = ((1. - target_var) * output - target_var * 10000.).max(1)[0]
-        loss = -torch.clamp(real - other + confidence, min=0.)  # equiv to max(..., 0.)
-        loss = torch.sum(loss)
-        return loss
-
+        loss = -torch.clamp(real - other + confidence, min=0.)
+        return torch.sum(loss)
 
 class Classifier(BaseModelDNN):
     def __init__(self) -> None:
         super(BaseModelDNN).__init__()
-        self.net = net(tau=args.tau, num_classes=num_classes, image_size=image_size).to(device)
+        if args.model == 'resnet18_nofsr':
+            self.net = net(num_classes=num_classes, image_size=image_size).to(device)
+        else:
+            self.net = net(tau=args.tau, num_classes=num_classes, image_size=image_size).to(device)
         self.set_requires_grad([self.net], False)
 
     def predict(self, x, is_eval=True):
