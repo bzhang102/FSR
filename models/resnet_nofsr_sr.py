@@ -70,8 +70,8 @@ class ResNet(nn.Module):
     
         return weight_center, weight_h, weight_w, weight_corner
 
-    def forward(self, x):
-        # shifting the image by i, j, and append
+    def forward(self, x, is_eval):
+        # create list of augmented images
         aug_list = []
         ind_i_j = {}
         ind = 0
@@ -80,6 +80,9 @@ class ResNet(nn.Module):
                 aug_list.append(transforms.functional.affine(x, translate=[i,j], angle=0, scale=1, shear=0))
                 ind_i_j[ind] = (i,j)
                 ind += 1
+    
+        # concatenate all augmented images into a single batch
+        x = torch.cat(aug_list, dim=0)
         
         # run through resnet
         out = F.relu(self.bn1(self.conv1(x)))
@@ -87,20 +90,21 @@ class ResNet(nn.Module):
         out = self.layer2(out)
         out = self.layer3(out)
         feature_field = self.layer4(out)
-                
-        feature_field_ensembled = feature_field[0:1, :, :, :] 
 
-        # for each shifted token
+        # init with first feature
+        feature_field_ensembled = feature_field[0:1].clone()
+
+        # for each shifted feature
         for k in range(1, ind):
             i, j = ind_i_j[k]
             
             # get current feature field
             feature_field_temp = feature_field[k:k+1, :, :, :]
 
-            # get patch weights
+            # get feature weights
             weight_center, weight_h, weight_w, weight_corner = self.calculate_sr_weights(i, j)
 
-            # Add central contribution
+            # add central contribution
             feature_field_ensembled += feature_field_temp * weight_center
 
             # height shift contributions
