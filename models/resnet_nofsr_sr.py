@@ -32,6 +32,12 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.in_planes = 64
         self.image_size = image_size
+        
+        # SR parameters
+        self.dx = dx
+        self.dy = dy
+        self.patch_size = 8
+        self.patch_pixels = self.patch_size ** 2
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -39,12 +45,9 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        
         self.linear = nn.Linear(512 * block.expansion, num_classes)
         self.avgpool_srt = nn.AvgPool2d(8)        
-        # SR parameters
-        self.dx = dx
-        self.dy = dy
+
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -53,64 +56,81 @@ class ResNet(nn.Module):
             layers.append(block(self.in_planes, planes, stride))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
+    
+    def calculate_sr_weights(self, i, j):
+        # get magnitude of shifts 
+        h_mag = abs(i)
+        w_mag = abs(j)
+        
+        # Calculate weights based on overlap areas
+        weight_center = (self.patch_size - h_mag) * (self.patch_size - w_mag) / self.patch_pixels
+        weight_h = h_mag * (self.patch_size - w_mag) / self.patch_pixels
+        weight_w = (self.patch_size - h_mag) * w_mag / self.patch_pixels
+        weight_corner = h_mag * w_mag / self.patch_pixels
+    
+        return weight_center, weight_h, weight_w, weight_corner
 
-    def forward(self, x, is_eval=False):
-        r_outputs = []
-        nr_outputs = []
-        rec_outputs = []
-
+    def forward(self, x):
+        # shifting the image by i, j, and append
         aug_list = []
-        # aug_list.append(x)
-        # store dictionary
-
-        b, _, h, w = x.shape # b (batch_size) * c (3) * h (32) * w (32)
-
         ind_i_j = {}
         ind = 0
-
-        # shifting the image by i, j, and append
         for i in range(- self.dy, self.dy + 1):
             for j in range(- self.dx, self.dx + 1):
                 aug_list.append(transforms.functional.affine(x, translate=[i,j], angle=0, scale=1, shear=0))
                 ind_i_j[ind] = (i,j)
                 ind += 1
-        image_batch = torch.cat(aug_list, dim=0)   #stacking them into one batch: (n*b) * 3 * 32 * 32 
-
-        w = w * 8
-        h = h * 8
-
-        x = image_batch
-
+        
+        # run through resnet
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
         feature_field = self.layer4(out)
+                
+        feature_field_ensembled = feature_field[0:1, :, :, :] 
 
-        # Encoded (features) (n*b) * c (512) * 4 * 4
-        feature_field_full = torch.nn.functional.interpolate(feature_field[0:b, :, :, :], scale_factor=8, mode='nearest')
-        # feature_field_full: (n*b) * c (512) * 32 * 32
-
-        # inverse shifts
-        for k in range(ind):
-            if k == 0:
-                continue
+        # for each shifted token
+        for k in range(1, ind):
             i, j = ind_i_j[k]
-            new_feature_field = torch.nn.functional.interpolate(feature_field[k*b:k*b+b, :, :, :], scale_factor=8, mode='nearest')
-            # remark: Rolling average
-            feature_field_full += transforms.functional.affine(new_feature_field, translate=[-i,-j], angle=0, scale=1, shear=0)
+            
+            # get current feature field
+            feature_field_temp = feature_field[k:k+1, :, :, :]
 
-        feature_fine_mean = feature_field_full / ind
+            # get patch weights
+            weight_center, weight_h, weight_w, weight_corner = self.calculate_sr_weights(i, j)
 
-        # b * c(512) * 32 * 32 ==> b * c * 4 * 4
-        out = self.avgpool_srt(feature_fine_mean)
+            # Add central contribution
+            feature_field_ensembled += feature_field_temp * weight_center
 
-        # Downstream
-        out = nn.AdaptiveAvgPool2d(1)(out)
+            # height shift contributions
+            if i > 0:
+                feature_field_ensembled[:,:,:-1,:] += feature_field_temp[:,:,1:,:] * weight_h
+            elif i < 0:
+                feature_field_ensembled[:,:,1:,:] += feature_field_temp[:,:,:-1,:] * weight_h
+
+            # width shift contributions
+            if j > 0:
+                feature_field_ensembled[:,:,:,:-1] += feature_field_temp[:,:,:,1:] * weight_w
+            elif j < 0:
+                feature_field_ensembled[:,:,:,1:] += feature_field_temp[:,:,:,:-1] * weight_w
+
+            # corner contributions
+            if i > 0 and j > 0:
+                feature_field_ensembled[:,:,:-1,:-1] += feature_field_temp[:,:,1:,1:] * weight_corner
+            elif i > 0 and j < 0:
+                feature_field_ensembled[:,:,:-1,1:] += feature_field_temp[:,:,1:,:-1] * weight_corner
+            elif i < 0 and j > 0:
+                feature_field_ensembled[:,:,1:,:-1] += feature_field_temp[:,:,:-1,1:] * weight_corner
+            elif i < 0 and j < 0:
+                feature_field_ensembled[:,:,1:,1:] += feature_field_temp[:,:,:-1,:-1] * weight_corner
+
+        # pool without interpolation
+        out = nn.AdaptiveAvgPool2d(1)(feature_field_ensembled)
         out = out.view(out.size(0), -1)
         out = self.linear(out)
 
-        return out, r_outputs, nr_outputs, rec_outputs
+        return out, [], [], []
 
-def ResNet18_NoFSR_sr(num_classes=10, image_size=(32, 32), dx=3, dy=3):
+def ResNet18_NoFSR_SR(num_classes=10, image_size=(32, 32), dx=3, dy=3):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, image_size=image_size, dx=dx, dy=dy)

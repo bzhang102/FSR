@@ -42,12 +42,12 @@ if args.model == 'resnet18':
     net = ResNet18_FSR
 
 elif args.model == 'resnet18_nofsr_sr_full':
-    from models.resnet_nofsr_sr import ResNet18_NoFSR_sr
-    net = ResNet18_NoFSR_sr
+    from models.resnet_nofsr_sr import ResNet18_NoFSR_SR
+    net = ResNet18_NoFSR_SR
 
 elif args.model == 'resnet18_nofsr_sr_single':
-    from models.resnet_nofsr_sr import ResNet18_NoFSR_sr
-    net = ResNet18_NoFSR_sr
+    from models.resnet_nofsr_sr import ResNet18_NoFSR_SR
+    net = ResNet18_NoFSR_SR
     from models.resnet_nofsr import ResNet18_NoFSR
     net_single = ResNet18_NoFSR
 
@@ -141,7 +141,7 @@ class Classifier(BaseModelDNN):
 
 def main():
     model = Classifier()
-    checkpoint = torch.load('cifar10_resnet18.pth')
+    checkpoint = torch.load('FSR_weights/cifar10/resnet18/cifar10_resnet18.pth')
     model.net.load_state_dict(checkpoint)
     model.net.eval()
     model.net_single.load_state_dict(checkpoint)

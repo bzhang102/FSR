@@ -107,5 +107,5 @@ class ResNet(nn.Module):
 
         return out, r_outputs, nr_outputs, rec_outputs
 
-def ResNet18_NoFSR_sr(num_classes=10, image_size=(32, 32), dx=3, dy=3):
+def ResNet18_NoFSR_SR(num_classes=10, image_size=(32, 32), dx=3, dy=3):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, image_size=image_size, dx=dx, dy=dy)
