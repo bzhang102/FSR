@@ -94,7 +94,7 @@ class ResNet(nn.Module):
         feature_field = self.layer4(out)
 
         # init with first feature
-        feature_field_ensembled = feature_field[0:b, :, :, :]
+        feature_field_ensembled = feature_field[0:b, :, :, :].clone()
 
         # for each shifted feature
         for k in range(1, ind):
@@ -104,7 +104,7 @@ class ResNet(nn.Module):
 
             feature_field_temp = feature_field[k*b:(k+1)*b, :, :, :]
             feature_field_ensembled += feature_field_temp * ((self.patch_size - h_mag) * (self.patch_size - w_mag) / self.patch_pixels)
-        
+         
             if i > 0:
                 feature_field_ensembled[:,:,:-1,:] += feature_field_temp[:,:,1:,:]*(h_mag*(self.patch_size-w_mag) / self.patch_pixels)
             elif i < 0:
