@@ -141,7 +141,7 @@ class Classifier(BaseModelDNN):
 
 def main():
     model = Classifier()
-    checkpoint = torch.load('FSR_weights/cifar10/resnet18/cifar10_resnet18.pth')
+    checkpoint = torch.load('weights/nonFSR_weights/cifar10/resnet18_nofsr/cifar10_resnet18.pth')
     model.net.load_state_dict(checkpoint)
     model.net.eval()
     model.net_single.load_state_dict(checkpoint)
