@@ -3,7 +3,6 @@ Codes modified from original codes of:
 CIFS : https://github.com/HanshuYAN/CIFS
 '''
 
-
 import torch
 from tqdm import tqdm
 
@@ -24,18 +23,24 @@ def predict_from_logits(logits, dim=1):
     return logits.topk(1, dim)[1]
 
 
-def attack_mini_batches(predict, predict_single, adversary, loader, device="cuda", num_batch=None, topk=1):
+def attack_mini_batches(predict, predict_single, adversary, loader, device="cuda", num_batch=None):
     lst_label = []
     lst_pred = []
     lst_advpred = []
 
     idx_batch = 0
+    
     for data, label in tqdm(loader):
         data, label = data.to(device), label.to(device)
         adv = adversary.perturb(data, label)
         
-        adv_logits, _, _, _ = predict(adv, is_eval=True)
-        advpred = predict_from_logits(adv_logits)
+        # Process adversarial examples batch by batch
+        batch_adv_preds = []
+        for i in range(adv.size(0)):
+            adv_logits, _, _, _ = predict(adv[i:i+1], is_eval=True)
+            batch_adv_preds.append(predict_from_logits(adv_logits))
+        advpred = torch.cat(batch_adv_preds)
+        
         nat_logits, _, _, _ = predict_single(data, is_eval=True)
         pred = predict_from_logits(nat_logits)
 
@@ -48,8 +53,8 @@ def attack_mini_batches(predict, predict_single, adversary, loader, device="cuda
             break
     
     label = torch.cat(lst_label).view(-1, 1)
-    pred = torch.cat(lst_pred).view(-1, topk)
-    advpred = torch.cat(lst_advpred).view(-1, topk)
+    pred = torch.cat(lst_pred).view(-1, 1)
+    advpred = torch.cat(lst_advpred).view(-1, 1)
     
     num = label.size(0)
     accuracy = (label == pred).sum().item() / num

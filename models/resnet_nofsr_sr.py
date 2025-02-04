@@ -97,6 +97,7 @@ class ResNet(nn.Module):
         feature_field_ensembled = feature_field[0:b, :, :, :].clone()
 
         # for each shifted feature
+        # for each shifted feature
         for k in range(1, ind):
             i, j = ind_i_j[k]
             h_mag = abs(i)
