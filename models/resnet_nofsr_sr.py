@@ -71,6 +71,8 @@ class ResNet(nn.Module):
         return weight_center, weight_h, weight_w, weight_corner
 
     def forward(self, x, is_eval):
+        b, _, h, w = x.shape # b (batch_size) * c (3) * h (32) * w (32)
+        
         # create list of augmented images
         aug_list = []
         ind_i_j = {}
@@ -92,42 +94,35 @@ class ResNet(nn.Module):
         feature_field = self.layer4(out)
 
         # init with first feature
-        feature_field_ensembled = feature_field[0:1].clone()
+        feature_field_ensembled = feature_field[0:b, :, :, :]
 
         # for each shifted feature
         for k in range(1, ind):
             i, j = ind_i_j[k]
-            
-            # get current feature field
-            feature_field_temp = feature_field[k:k+1, :, :, :]
+            h_mag = abs(i)
+            w_mag = abs(j)
 
-            # get feature weights
-            weight_center, weight_h, weight_w, weight_corner = self.calculate_sr_weights(i, j)
-
-            # add central contribution
-            feature_field_ensembled += feature_field_temp * weight_center
-
-            # height shift contributions
+            feature_field_temp = feature_field[k*b:(k+1)*b, :, :, :]
+            feature_field_ensembled += feature_field_temp * ((self.patch_size - h_mag) * (self.patch_size - w_mag) / self.patch_pixels)
+        
             if i > 0:
-                feature_field_ensembled[:,:,:-1,:] += feature_field_temp[:,:,1:,:] * weight_h
+                feature_field_ensembled[:,:,:-1,:] += feature_field_temp[:,:,1:,:]*(h_mag*(self.patch_size-w_mag) / self.patch_pixels)
             elif i < 0:
-                feature_field_ensembled[:,:,1:,:] += feature_field_temp[:,:,:-1,:] * weight_h
+                feature_field_ensembled[:,:,1:,:] += feature_field_temp[:,:,:-1,:]*(h_mag*(self.patch_size-w_mag) / self.patch_pixels)
 
-            # width shift contributions
             if j > 0:
-                feature_field_ensembled[:,:,:,:-1] += feature_field_temp[:,:,:,1:] * weight_w
+                feature_field_ensembled[:,:,:,:-1] += feature_field_temp[:,:,:,1:]*((self.patch_size-h_mag)*w_mag / self.patch_pixels)
             elif j < 0:
-                feature_field_ensembled[:,:,:,1:] += feature_field_temp[:,:,:,:-1] * weight_w
+                feature_field_ensembled[:,:,:,1:] += feature_field_temp[:,:,:,:-1]*((self.patch_size-h_mag)*w_mag / self.patch_pixels)
 
-            # corner contributions
             if i > 0 and j > 0:
-                feature_field_ensembled[:,:,:-1,:-1] += feature_field_temp[:,:,1:,1:] * weight_corner
+                feature_field_ensembled[:,:,:-1,:-1] += feature_field_temp[:,:,1:,1:]*(h_mag*w_mag / self.patch_pixels)  
             elif i > 0 and j < 0:
-                feature_field_ensembled[:,:,:-1,1:] += feature_field_temp[:,:,1:,:-1] * weight_corner
+                feature_field_ensembled[:,:,:-1,1:] += feature_field_temp[:,:,1:,:-1]*(h_mag*w_mag / self.patch_pixels)  
             elif i < 0 and j > 0:
-                feature_field_ensembled[:,:,1:,:-1] += feature_field_temp[:,:,:-1,1:] * weight_corner
+                feature_field_ensembled[:,:,1:,:-1] += feature_field_temp[:,:,:-1,1:]*(h_mag*w_mag / self.patch_pixels)  
             elif i < 0 and j < 0:
-                feature_field_ensembled[:,:,1:,1:] += feature_field_temp[:,:,:-1,:-1] * weight_corner
+                feature_field_ensembled[:,:,1:,1:] += feature_field_temp[:,:,:-1,:-1]*(h_mag*w_mag / self.patch_pixels)  
 
         # pool without interpolation
         out = nn.AdaptiveAvgPool2d(1)(feature_field_ensembled)
