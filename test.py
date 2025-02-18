@@ -1,175 +1,127 @@
-'''
-Some parts of the code are modified from:
-CAS : https://github.com/bymavis/CAS_ICLR2021
-CIFS : https://github.com/HanshuYAN/CIFS
-'''
-
-
 import os, argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-
 import torchvision
 import torchvision.transforms as transforms
-
 from models.BaseModel import BaseModelDNN
 
-
-def boolean_string(s):
-    if s not in {'False', 'True'}:
-        raise ValueError('Not a valid boolean string')
-    return s == 'True'
-
-
 parser = argparse.ArgumentParser(description='Configuration')
-parser.add_argument('--load_name', type=str, help='specify checkpoint load name')
-parser.add_argument('--model', default='resnet18')
+parser.add_argument('--load_name', type=str, help='specify checkpoint load name', default='cifar10_resnet18')
+parser.add_argument('--train_type', choices=['AT', 'TRADES', 'MART'], default='AT')
 parser.add_argument('--dataset', default='cifar10')
-parser.add_argument('--tau', default=0.1, type=float)
-parser.add_argument('--bs', default=128, type=int, help='batch size')
-parser.add_argument('--device', default=0, type=int)
+parser.add_argument('--sr_type', choices=['base', 'full', 'single'], default='base')
+parser.add_argument('--model_type', choices=['resnet', 'wideresnet'], default='resnet')
+parser.add_argument('--dxdy', default=3, type=int)
+parser.add_argument('--bs', default=32, type=int)
+parser.add_argument('--device', type=int)
 
 args = parser.parse_args()
+device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
 
-device = 'cuda:{}'.format(args.device) if torch.cuda.is_available() else 'cpu'
-
-
-if args.model == 'resnet18':
-    from models.resnet_fsr import ResNet18_FSR
-    net = ResNet18_FSR
-
-elif args.model == 'resnet18_nofsr':
-    from models.resnet_nofsr import ResNet18_NoFSR
-    net = ResNet18_NoFSR
-
-elif args.model == 'vgg16':
-    from models.vgg_fsr import vgg16_FSR
-    net = vgg16_FSR
-
-elif args.model == 'wideresnet34':
-    from models.wideresnet34_fsr import WideResNet34_FSR
-    net = WideResNet34_FSR
+if args.model_type == 'resnet':
+    if args.sr_type == 'base':
+        from models.resnet_nofsr import ResNet18_NoFSR as net
+    elif args.sr_type == 'full':
+        from models.resnet_nofsr_sr import ResNet18_NoFSR_SR as net
+    elif args.sr_type == 'single':
+        from models.resnet_nofsr_sr import ResNet18_NoFSR_SR as net 
+        from models.resnet_nofsr import ResNet18_NoFSR as net_single
+elif args.model_type == 'wideresnet':
+    if args.sr_type == 'base':
+        from models.wideresnet_nofsr import WideResNet34_NoFSR as net
+    elif args.sr_type == 'full':
+        from models.wideresnet_nofsr_sr import WideResNet34_NoFSR_SR as net
+    elif args.sr_type == 'single':
+        from models.wideresnet_nofsr_sr import WideResNet34_NoFSR_SR as net
+        from models.wideresnet_nofsr import WideResNet34_NoFSR as net_single
 
 if args.dataset == 'cifar10':
     image_size = (32, 32)
     num_classes = 10
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=args.bs, shuffle=False)
-
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transforms.ToTensor())
 elif args.dataset == 'svhn':
     image_size = (32, 32)
     num_classes = 10
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-    testset = torchvision.datasets.SVHN(root='./data', split='test', download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=args.bs, shuffle=False)
+    testset = torchvision.datasets.SVHN(root='./data', split='test', download=True, transform=transforms.ToTensor())
 
-
-
-def get_pred(out, labels):
-    pred = out.sort(dim=-1, descending=True)[1][:, 0]
-    second_pred = out.sort(dim=-1, descending=True)[1][:, 1]
-    adv_label = torch.where(pred == labels, second_pred, pred)
-
-    return adv_label
-
+testloader = torch.utils.data.DataLoader(testset, batch_size=args.bs, shuffle=False)
 
 class CE_loss(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
     def forward(self, logits_final, target):
-        loss = F.cross_entropy(logits_final, target)
-
-        return loss
-
+        return F.cross_entropy(logits_final, target)
 
 class CW_loss(nn.Module):
-    def __init__(self, num_classes=10) -> None:
+    def __init__(self, num_classes=10):
         super().__init__()
         self.num_classes = num_classes
-
+        
     def forward(self, logits_final, target):
-        loss = self._cw_loss(logits_final, target, num_classes=self.num_classes)
-
-        return loss
-
-    def _cw_loss(self, output, target, confidence=50, num_classes=10):
         target = target.data
-        target_onehot = torch.zeros(target.size() + (num_classes,))
-        target_onehot = target_onehot.to(device)
+        target_onehot = torch.zeros(target.size() + (num_classes,)).to(device)
         target_onehot.scatter_(1, target.unsqueeze(1), 1.)
-        target_var = Variable(target_onehot, requires_grad=False)
-        real = (target_var * output).sum(1)
-        other = ((1. - target_var) * output - target_var * 10000.).max(1)[0]
-        loss = -torch.clamp(real - other + confidence, min=0.)
-        return torch.sum(loss)
+        real = (target_onehot * logits_final).sum(1)
+        other = ((1. - target_onehot) * logits_final - target_onehot * 10000.).max(1)[0]
+        return -torch.clamp(real - other + 50, min=0.).sum()
 
 class Classifier(BaseModelDNN):
-    def __init__(self) -> None:
+    def __init__(self):
         super(BaseModelDNN).__init__()
-        if args.model == 'resnet18_nofsr':
+        if args.sr_type == 'base':
             self.net = net(num_classes=num_classes, image_size=image_size).to(device)
+            self.net_single = self.net
+        elif args.sr_type == 'single':
+            self.net = net(num_classes=num_classes, image_size=image_size, dx=args.dxdy, dy=args.dxdy).to(device)
+            self.net_single = net_single(num_classes=num_classes, image_size=image_size).to(device)
         else:
-            self.net = net(tau=args.tau, num_classes=num_classes, image_size=image_size).to(device)
-        self.set_requires_grad([self.net], False)
-
+            self.net = net(num_classes=num_classes, image_size=image_size, dx=args.dxdy, dy=args.dxdy).to(device)
+            self.net_single = self.net
+            
     def predict(self, x, is_eval=True):
         return self.net(x, is_eval=is_eval)
-
+        
+    def predict_single_pass(self, x, is_eval=True):
+        return self.net_single(x, is_eval=is_eval)
 
 def main():
     model = Classifier()
-    checkpoint = torch.load('./weights/{}/{}/{}.pth'.format(args.dataset, args.model, args.load_name, map_location=device))
+    model_name = 'resnet18' if args.model_type == 'resnet' else 'wrn34'
+    checkpoint = torch.load(f'weights/{args.train_type}_weights/{args.dataset}/{model_name}_nofsr/{args.load_name}.pth')
     model.net.load_state_dict(checkpoint)
+    model.net_single.load_state_dict(checkpoint)
     model.net.eval()
+    model.net_single.eval()
 
     from advertorch_fsr.attacks import FGSM, LinfPGDAttack
-
-    lst_attack = [
-        (FGSM, dict(
-            loss_fn=CE_loss(),
-            eps=8 / 255,
-            clip_min=0.0, clip_max=1.0, targeted=False), 'FGSM'),
-        (LinfPGDAttack, dict(
-            loss_fn=CE_loss(),
-            eps=8 / 255, nb_iter=20, eps_iter=0.1 * (8 / 255), rand_init=False,
-            clip_min=0.0, clip_max=1.0, targeted=False), 'PGD-20'),
-        (LinfPGDAttack, dict(
-            loss_fn=CE_loss(),
-            eps=8 / 255, nb_iter=100, eps_iter=0.1 * (8 / 255), rand_init=False,
-            clip_min=0.0, clip_max=1.0, targeted=False), 'PGD-100'),
-        (LinfPGDAttack, dict(
-            loss_fn=CW_loss(num_classes=num_classes),
-            eps=8 / 255, nb_iter=30, eps_iter=0.1 * (8 / 255), rand_init=False,
-            clip_min=0.0, clip_max=1.0, targeted=False), 'C&W'),
+    
+    attacks = [
+        (FGSM, dict(loss_fn=CE_loss(), eps=8/255, clip_min=0.0, clip_max=1.0, targeted=False), 'FGSM'),
+        (LinfPGDAttack, dict(loss_fn=CE_loss(), eps=8/255, nb_iter=20, eps_iter=0.8/255, 
+                            rand_init=False, clip_min=0.0, clip_max=1.0, targeted=False), 'PGD-20'),
+        (LinfPGDAttack, dict(loss_fn=CE_loss(), eps=8/255, nb_iter=100, eps_iter=0.8/255,
+                            rand_init=False, clip_min=0.0, clip_max=1.0, targeted=False), 'PGD-100'),
+        (LinfPGDAttack, dict(loss_fn=CW_loss(num_classes=num_classes), eps=8/255, nb_iter=30, 
+                            eps_iter=0.8/255, rand_init=False, clip_min=0.0, clip_max=1.0, targeted=False), 'C&W'),
     ]
+
     attack_results = []
-    for attack_class, attack_kwargs, name in lst_attack:
+    for attack_class, attack_kwargs, name in attacks:
         from metric.classification import defense_success_rate
-
-        message, defense_success, natural_success = defense_success_rate(model.predict,
-                                                                         testloader, attack_class,
-                                                                         attack_kwargs, device=device)
-
-        message = name + ': ' + message
-        print(message)
+        message, defense_success, natural_success = defense_success_rate(
+            model.predict, model.predict_single_pass, testloader, 
+            attack_class, attack_kwargs, device=device
+        )
+        print(f'{name}: {message}')
         attack_results.append(defense_success)
+    
     attack_results.append(natural_success)
     attack_results = torch.cat(attack_results, 1)
     attack_results = attack_results.sum(1)
-    attack_results[attack_results < len(lst_attack) + 1] = 0.
-    if args.dataset == 'cifar10':
-        print('Ensemble : {:.2f}%'.format(100. * attack_results.count_nonzero() / 10000.))
-    elif args.dataset == 'svhn':
-        print('Ensemble : {:.2f}%'.format(100. * attack_results.count_nonzero() / 26032.))
-
+    attack_results[attack_results < len(attacks) + 1] = 0.
+    
+    dataset_size = 10000 if args.dataset == 'cifar10' else 26032
+    print(f'Ensemble: {100. * attack_results.count_nonzero() / dataset_size:.2f}%')
 
 if __name__ == '__main__':
     main()
